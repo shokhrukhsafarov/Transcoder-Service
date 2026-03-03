@@ -1,0 +1,98 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: salomtv_app
+    ports:
+      - "8000:8000"
+    environment:
+      - DOT_ENV_PATH=/app/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    entrypoint: ["/bin/sh", "-c", "for i in $(seq 1 30); do pg_isready -h postgres -p 5432 -U dbuser -d dbname && break; echo 'Waiting for PostgreSQL...'; sleep 2; done; exec /salomtv_go_transcoder_api"]
+    networks:
+      - app-network
+    volumes:
+      - ./config:/config
+      - ./.env:/app/.env
+
+  migrate:
+    image: migrate/migrate
+    container_name: salomtv_migrate
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./migrations:/migrations
+    command: ["-path", "/migrations", "-database", "postgres://dbuser:dbpass@postgres:5432/dbname?sslmode=disable", "up"]
+    networks:
+      - app-network
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: salomtv_postgres
+    environment:
+      - POSTGRES_USER=dbuser
+      - POSTGRES_PASSWORD=dbpass
+      - POSTGRES_DB=dbname
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dbuser -d dbname"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - app-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: salomtv_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - app-network
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: salomtv_rabbitmq
+    environment:
+      - RABBITMQ_DEFAULT_USER=rabbitmq_root
+      - RABBITMQ_DEFAULT_PASS=your_rabbitmq_password
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  rabbitmq_data:
